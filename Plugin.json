@@ -1,0 +1,8 @@
+{
+  "id": "sync-selected-files-to-other-pane-for-windows",
+  "name": "SyncSelectedFilesToOtherPaneForWindows",
+  "description": "Sync selected files and folders to the other pane using robocopy (Windows only)",
+  "version": "1.0.0",
+  "author": "XIDA",
+  "windows_only": true
+}
