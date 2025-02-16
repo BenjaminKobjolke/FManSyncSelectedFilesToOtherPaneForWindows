@@ -16,6 +16,24 @@ class SyncFilesTask(Task):
         self._current_process = None
         self.set_size(len(files_to_sync))
 
+    def _interpret_robocopy_exit_code(self, exit_code):
+        """Interpret robocopy exit codes and return a tuple of (success, message)"""
+        if exit_code <= 7:  # Success codes
+            return True, {
+                0: "No files copied",
+                1: "Files copied successfully",
+                2: "Extra files or directories detected",
+                3: "Some files copied, extra files detected",
+                4: "Some mismatched files or directories detected",
+                5: "Some files copied, some failed",
+                6: "Additional files and mismatched files exist",
+                7: "Files and directories copied with errors"
+            }.get(exit_code, "Operation completed with code " + str(exit_code))
+        elif exit_code == 8:
+            return False, "Some files or directories could not be copied"
+        else:
+            return False, f"Serious error occurred (code {exit_code})"
+
     def __call__(self):
         try:
             # Setup log file
@@ -28,11 +46,11 @@ class SyncFilesTask(Task):
                 filename = os.path.basename(source_path)
                 self.set_text(f'Copying {i} of {len(self._files)}: {filename}')
 
-                # Generate robocopy command
+                # Generate robocopy command with progress output
                 if is_dir:
-                    cmd = f'robocopy "{source_path}" "{self._target_path}/{filename}" /e /MT:32'
+                    cmd = f'robocopy "{source_path}" "{self._target_path}/{filename}" /e /MT:32 /bytes /np'
                 else:
-                    cmd = f'robocopy "{os.path.dirname(source_path)}" "{self._target_path}" "{filename}" /MT:32'
+                    cmd = f'robocopy "{os.path.dirname(source_path)}" "{self._target_path}" "{filename}" /MT:32 /bytes /np'
 
                 # Log command with timestamp
                 timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -56,17 +74,36 @@ class SyncFilesTask(Task):
                     errors='replace'
                 )
 
-                # Wait for completion
-                while self._current_process.poll() is None:
-                    self.check_canceled()  # Allow cancellation
-                    time.sleep(0.1)
+                # Monitor output and progress
+                while True:
+                    self.check_canceled()
+                    
+                    # Read a line of output
+                    output_line = self._current_process.stdout.readline()
+                    if not output_line and self._current_process.poll() is not None:
+                        break
+                        
+                    # Log output
+                    with open(log_file, 'a', encoding='utf-8') as f:
+                        f.write(output_line)
+                        
+                    # Update status if it contains progress information
+                    if "%" in output_line:
+                        self.set_text(f'Copying {i} of {len(self._files)}: {filename} - {output_line.strip()}')
 
-                # Get output
+                # Get remaining output and exit code
                 stdout, stderr = self._current_process.communicate()
+                exit_code = self._current_process.returncode
+                success, message = self._interpret_robocopy_exit_code(exit_code)
 
-                # Log completion
+                # Log completion and status
                 with open(log_file, 'a', encoding='utf-8') as f:
-                    f.write(f'[{timestamp}] Exit Code: {self._current_process.returncode}\n')
+                    f.write(f'[{timestamp}] {message} (Exit Code: {exit_code})\n')
+                    if stderr:
+                        f.write(f'[{timestamp}] Errors: {stderr}\n')
+
+                if not success:
+                    show_status_message(f'Warning: {message} while copying {filename}')
 
                 # Update progress
                 self.set_progress(i)
@@ -155,11 +192,11 @@ class SyncSelectedFilesToOtherPaneDryRunForWindows(DirectoryPaneCommand, SyncFil
             show_status_message(f'Processing element {i} of {total_elements}: {os.path.basename(file_url)}')
             source_path = as_human_readable(file_url)
             
-            # Generate robocopy command
+            # Generate robocopy command with progress output flags
             if os.path.isdir(source_path):
-                cmd = f'robocopy "{source_path}" "{target_path}/{os.path.basename(source_path)}" /e /MT:32'
+                cmd = f'robocopy "{source_path}" "{target_path}/{os.path.basename(source_path)}" /e /MT:32 /bytes /np'
             else:
-                cmd = f'robocopy "{os.path.dirname(source_path)}" "{target_path}" "{os.path.basename(source_path)}" /MT:32'
+                cmd = f'robocopy "{os.path.dirname(source_path)}" "{target_path}" "{os.path.basename(source_path)}" /MT:32 /bytes /np'
 
             # Log command with timestamp
             timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
